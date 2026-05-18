@@ -1,5 +1,5 @@
 const { v4: uuidv4 } = require('uuid');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const Groq = require('groq-sdk');
 const ChatSession = require('../models/ChatSession');
 
 const SYSTEM_PROMPT = `You are NexAI Assistant, the smart and friendly AI chatbot for NexAI Solutions — a full-service digital agency based in India serving global clients.
@@ -80,28 +80,38 @@ async function sendMessage(req, res) {
       timestamp: new Date()
     });
 
-    const chatHistory = session.messages.slice(-10).map((msg) => ({
-      role: msg.role,
-      parts: [{ text: msg.content }]
-    }));
+    // Build messages for Groq API
+    const messages = [
+      ...session.messages.slice(-10).map((msg) => ({
+        role: msg.role === 'model' ? 'assistant' : 'user',
+        content: msg.content
+      }))
+    ];
 
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-flash-preview-04-17',
-      systemInstruction: SYSTEM_PROMPT
+    const groq = new Groq({
+      apiKey: process.env.GROQ_API_KEY
     });
-
-    const chat = model.startChat({ history: chatHistory.slice(0, -1) });
 
     let aiReply;
     try {
-      const result = await chat.sendMessage(userMessage);
-      aiReply = result.response.text();
-    } catch (geminiError) {
-      if (geminiError.status === 429) {
+      const completion = await groq.chat.completions.create({
+        messages: [
+          {
+            role: 'system',
+            content: SYSTEM_PROMPT
+          },
+          ...messages
+        ],
+        model: 'llama-3.1-8b-instant',
+        temperature: 0.7,
+        max_tokens: 1024
+      });
+      aiReply = completion.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
+    } catch (groqError) {
+      if (groqError.status === 429) {
         return sendError(res, 503, 'Our AI is busy, please try again in a moment!', ['Rate limit exceeded']);
       }
-      throw geminiError;
+      throw groqError;
     }
 
     session.messages.push({
